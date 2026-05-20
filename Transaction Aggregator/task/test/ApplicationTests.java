@@ -7,6 +7,8 @@ import org.hyperskill.hstest.testcase.CheckResult;
 import org.hyperskill.hstest.testing.expect.json.builder.JsonArrayBuilder;
 import org.hyperskill.hstest.testing.expect.json.builder.JsonObjectBuilder;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
@@ -20,14 +22,21 @@ public class ApplicationTests extends SpringTest {
     private final DataServer dataServer2 = new DataServer("server-2", 8889, "033", "128");
 
     CheckResult testAggregate(String account) {
-        CheckResult result;
+        CheckResult result = null;
+        var start = Instant.now();
         var response = get("/aggregate")
                 .addParam("account", account)
                 .send();
 
         System.out.println(getRequestDetails(response));
 
-        if (response.getStatusCode() == 200) {
+        var delay = Duration.between(start, Instant.now()).getSeconds();
+        if (delay > 4) {
+            var message = "It appears your application doesn't use asynchronous requests and/or proper data caching";
+            result = CheckResult.wrong(message);
+        }
+
+        if (result == null && response.getStatusCode() == 200) {
             var list1 = dataServer1.getTransactions(account);
             var list2 = dataServer2.getTransactions(account);
             var expected = Stream.of(list1, list2)
@@ -40,7 +49,7 @@ public class ApplicationTests extends SpringTest {
             } catch (WrongAnswer e) {
                 result = CheckResult.wrong(e.getFeedbackText());
             }
-        } else {
+        } else if (result == null) {
             result = CheckResult.wrong("Expected response status code 200 but got " + response.getStatusCode());
         }
 
@@ -82,6 +91,12 @@ public class ApplicationTests extends SpringTest {
     DynamicTesting[] dt = new DynamicTesting[] {
             () -> testAggregate("033"),
             () -> testAggregate("128"),
+            () -> testAggregate("255"),
+            () -> testAggregate("033"),
+            () -> testAggregate("033"),
+            () -> testAggregate("128"),
+            () -> testAggregate("128"),
+            () -> testAggregate("255"),
             () -> testAggregate("255"),
             this::stopMockServers
     };

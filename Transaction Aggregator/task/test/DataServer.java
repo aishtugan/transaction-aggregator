@@ -11,11 +11,14 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 class DataServer {
     private final HttpServer server;
@@ -30,7 +33,7 @@ class DataServer {
             server = HttpServer.create(new InetSocketAddress(address, port), 0);
 
             HttpContext pingContext = server.createContext("/transactions");
-            pingContext.setHandler(new TransactionsHttpHandler(transactions));
+            pingContext.setHandler(new TransactionsHttpHandler(serverId, transactions));
 
             server.start();
         } catch (IOException e) {
@@ -52,8 +55,9 @@ class DataServer {
         var rnd = new Random();
         Map<String, List<Transaction>> transactions = new HashMap<>(accounts.length);
         for (var account : accounts) {
-            List<Transaction> txList = new ArrayList<>(5);
-            for (int i = 0; i < 5; i++) {
+            var size = rnd.nextInt(3, 10);
+            List<Transaction> txList = new ArrayList<>(size);
+            for (int i = 0; i < size; i++) {
                 var tx = new Transaction(
                         UUID.randomUUID().toString(),
                         serverId,
@@ -75,23 +79,47 @@ class DataServer {
 }
 
 class TransactionsHttpHandler implements HttpHandler {
+    private final String serverId;
     private final Gson gson = new Gson();
     private final Map<String, List<Transaction>> transactions;
+    private final List<Integer> responseCodes;
+    private int index = 0;
+    private int delay = 800;
 
-    public TransactionsHttpHandler(Map<String, List<Transaction>> transactions) {
+    public TransactionsHttpHandler(String serverId, Map<String, List<Transaction>> transactions) {
+        this.serverId = serverId;
         this.transactions = transactions;
+        responseCodes = Stream.of(
+                        Stream.generate(() -> 503).limit(1).toList(),
+                        Stream.generate(() -> 529).limit(3).toList(),
+                        Stream.generate(() -> 200).limit(1).toList()
+                )
+                .flatMap(List::stream)
+                .collect(Collectors.toCollection(ArrayList::new));
+        Collections.shuffle(responseCodes);
     }
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if ("GET".equals(exchange.getRequestMethod())) {
             var tx = parseQuery(exchange);
-            var body = gson.toJson(tx);
-            exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, body.length());
+            var code = responseCodes.get(index);
+            String body = "";
+            index = (index + 1) % responseCodes.size();
+
+            if (code == 200) {
+                sleep();
+                body = gson.toJson(tx);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(code, body.length());
+            } else {
+                exchange.sendResponseHeaders(code, 0);
+            }
+
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(body.getBytes());
             }
+
         } else {
             var body = "Method not supported";
             exchange.sendResponseHeaders(405, body.length());
@@ -99,6 +127,17 @@ class TransactionsHttpHandler implements HttpHandler {
                 os.write(body.getBytes(StandardCharsets.UTF_8));
             }
         }
+    }
+
+    private void sleep() {
+        try {
+            System.out.printf(serverId + " is executing a long query for %d ms...%n", delay);
+            Thread.sleep(delay);
+        } catch (InterruptedException ignored) {
+            System.out.println("Thread " + Thread.currentThread().getName()
+                    + " awaken from the sleep for " + delay + "ms");
+        }
+        delay *= 2;
     }
 
     private List<Transaction> parseQuery(HttpExchange exchange) {
