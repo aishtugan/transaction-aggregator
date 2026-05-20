@@ -1,28 +1,45 @@
+import com.google.gson.Gson;
 import com.sun.net.httpserver.HttpContext;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
-import org.hyperskill.hstest.exception.outcomes.WrongAnswer;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.UUID;
 
-public class DataServer {
+class DataServer {
     private final HttpServer server;
-    public DataServer(String id) {
+    private final String serverId;
+    private final Map<String, List<Transaction>> transactions;
+
+    public DataServer(String id, int port, String... accounts) {
+        serverId = id;
+        transactions = generate(accounts);
         try {
             InetAddress address = InetAddress.getByName("127.0.0.1");
-            server = HttpServer.create(new InetSocketAddress(address, 8889), 0);
+            server = HttpServer.create(new InetSocketAddress(address, port), 0);
 
-            HttpContext pingContext = server.createContext("/ping");
-            pingContext.setHandler(new PingHttpHandler(id));
+            HttpContext pingContext = server.createContext("/transactions");
+            pingContext.setHandler(new TransactionsHttpHandler(transactions));
 
             server.start();
         } catch (IOException e) {
-            throw new WrongAnswer("Failed to start the local data service: " + e.getMessage());
+            throw new RuntimeException("Failed to start the local data service: " + e.getMessage());
         }
+    }
+
+    public List<Transaction> getTransactions(String account) {
+        return transactions.getOrDefault(account, List.of());
     }
 
     public void stop() {
@@ -30,25 +47,84 @@ public class DataServer {
             server.stop(1);
         }
     }
+
+    private Map<String, List<Transaction>> generate(String... accounts) {
+        var rnd = new Random();
+        Map<String, List<Transaction>> transactions = new HashMap<>(accounts.length);
+        for (var account : accounts) {
+            List<Transaction> txList = new ArrayList<>(5);
+            for (int i = 0; i < 5; i++) {
+                var tx = new Transaction(
+                        UUID.randomUUID().toString(),
+                        serverId,
+                        account,
+                        String.valueOf(rnd.nextInt(10, 10_000)),
+                        LocalDateTime.now()
+                                .minusDays(rnd.nextLong(1, 30))
+                                .plusHours(rnd.nextInt(0, 24))
+                                .plusMinutes(rnd.nextInt(0, 60))
+                                .plusSeconds(rnd.nextInt(0, 60))
+                                .toString()
+                );
+                txList.add(tx);
+            }
+            transactions.put(account, txList);
+        }
+        return transactions;
+    }
 }
 
-class PingHttpHandler implements HttpHandler {
-    private final String serverId;
+class TransactionsHttpHandler implements HttpHandler {
+    private final Gson gson = new Gson();
+    private final Map<String, List<Transaction>> transactions;
 
-    public PingHttpHandler(String id) {
-        serverId = id;
+    public TransactionsHttpHandler(Map<String, List<Transaction>> transactions) {
+        this.transactions = transactions;
     }
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if ("GET".equals(exchange.getRequestMethod())) {
-            exchange.getResponseHeaders().set("Content-Type", "text/plain");
-            var body = "Pong from " + serverId;
-            exchange.sendResponseHeaders(200, body.getBytes().length);
-
-            try (OutputStream outputStream = exchange.getResponseBody()){
-                outputStream.write(body.getBytes());
+            var tx = parseQuery(exchange);
+            var body = gson.toJson(tx);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length());
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(body.getBytes());
+            }
+        } else {
+            var body = "Method not supported";
+            exchange.sendResponseHeaders(405, body.length());
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(body.getBytes(StandardCharsets.UTF_8));
             }
         }
     }
+
+    private List<Transaction> parseQuery(HttpExchange exchange) {
+        var query = exchange.getRequestURI().getQuery();
+        if (query == null) {
+            return List.of();
+        }
+        var queryParams = query.split("&");
+        for (var param : queryParams) {
+            var parts = param.split("=");
+            if (parts.length < 2) {
+                continue;
+            }
+            if ("account".equalsIgnoreCase(parts[0])) {
+                return transactions.getOrDefault(parts[1], List.of());
+            }
+        }
+        return List.of();
+    }
+}
+
+record Transaction(
+        String id,
+        String serverId,
+        String account,
+        String amount,
+        String timestamp
+) {
 }

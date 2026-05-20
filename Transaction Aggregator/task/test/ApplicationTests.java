@@ -1,38 +1,75 @@
 import org.hyperskill.hstest.dynamic.DynamicTest;
 import org.hyperskill.hstest.dynamic.input.DynamicTesting;
+import org.hyperskill.hstest.exception.outcomes.WrongAnswer;
 import org.hyperskill.hstest.mocks.web.response.HttpResponse;
 import org.hyperskill.hstest.stage.SpringTest;
 import org.hyperskill.hstest.testcase.CheckResult;
+import org.hyperskill.hstest.testing.expect.json.builder.JsonArrayBuilder;
+import org.hyperskill.hstest.testing.expect.json.builder.JsonObjectBuilder;
 
-import java.util.UUID;
+import java.util.Comparator;
+import java.util.List;
+import java.util.stream.Stream;
+
+import static org.hyperskill.hstest.testing.expect.Expectation.expect;
+import static org.hyperskill.hstest.testing.expect.json.JsonChecker.isArray;
+import static org.hyperskill.hstest.testing.expect.json.JsonChecker.isObject;
 
 public class ApplicationTests extends SpringTest {
-    private final String serverId = UUID.randomUUID().toString();
-    private final DataServer dataServer = new DataServer(serverId);
+    private final DataServer dataServer1 = new DataServer("server-1", 8888, "033", "128");
+    private final DataServer dataServer2 = new DataServer("server-2", 8889, "033", "128");
 
-    CheckResult testPing() {
+    CheckResult testAggregate(String account) {
         CheckResult result;
-        var response = get("/aggregate").send();
+        var response = get("/aggregate")
+                .addParam("account", account)
+                .send();
 
         System.out.println(getRequestDetails(response));
 
         if (response.getStatusCode() == 200) {
-            var expected = "Pong from " + serverId;
-            var actual = response.getContent();
-            if (expected.equals(actual)) {
+            var list1 = dataServer1.getTransactions(account);
+            var list2 = dataServer2.getTransactions(account);
+            var expected = Stream.of(list1, list2)
+                    .flatMap(List::stream)
+                    .sorted(Comparator.comparing(Transaction::timestamp).reversed())
+                    .toList();
+            try {
+                checkJson(response, expected);
                 result = CheckResult.correct();
-            } else {
-                result = CheckResult.wrong(
-                        "Response doesn't contain the expected body.\nExpected: %s\n  Actual: %s\n"
-                                .formatted(expected, actual)
-                );
+            } catch (WrongAnswer e) {
+                result = CheckResult.wrong(e.getFeedbackText());
             }
         } else {
             result = CheckResult.wrong("Expected response status code 200 but got " + response.getStatusCode());
         }
 
-        dataServer.stop();
+        if (!result.isCorrect()) {
+            dataServer1.stop();
+            dataServer2.stop();
+        }
+
         return result;
+    }
+
+    CheckResult stopMockServers() {
+        dataServer1.stop();
+        dataServer2.stop();
+        return CheckResult.correct();
+    }
+
+    private void checkJson(HttpResponse response, List<Transaction> expected) {
+        JsonArrayBuilder arrayBuilder = isArray(expected.size());
+        for (var tx : expected) {
+            JsonObjectBuilder objectBuilder = isObject()
+                    .value("id", tx.id())
+                    .value("serverId", tx.serverId())
+                    .value("account", tx.account())
+                    .value("amount", tx.amount())
+                    .value("timestamp", tx.timestamp());
+            arrayBuilder = arrayBuilder.item(objectBuilder);
+        }
+        expect(response.getContent()).asJson().check(arrayBuilder);
     }
 
     private String getRequestDetails(HttpResponse response) {
@@ -43,6 +80,9 @@ public class ApplicationTests extends SpringTest {
 
     @DynamicTest
     DynamicTesting[] dt = new DynamicTesting[] {
-            this::testPing
+            () -> testAggregate("033"),
+            () -> testAggregate("128"),
+            () -> testAggregate("255"),
+            this::stopMockServers
     };
 }
