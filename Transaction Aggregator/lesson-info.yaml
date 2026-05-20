@@ -1,0 +1,6 @@
+type: framework
+content:
+  - Send a ping
+  - Fetch data
+  - Faulty servers
+  - Long queries
