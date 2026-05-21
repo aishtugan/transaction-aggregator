@@ -15,6 +15,13 @@ files:
   - name: test/DataServer.java
     visible: true
     learner_created: false
+  - name: src/aggregator/AccountDataClient.java
+    visible: true
+    learner_created: true
 feedback_link: https://hyperskill.org/projects/424/stages/2487/implement#comment
-status: Unchecked
+status: Solved
+feedback:
+  message: Well done! You've finished the project. Select a new project on <a href="https://hyperskill.org/projects">Hyperskill</a>
+    to continue learning.
+  time: "Thu, 21 May 2026 03:04:26 UTC"
 record: -1

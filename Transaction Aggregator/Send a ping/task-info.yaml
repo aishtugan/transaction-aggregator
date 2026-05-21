@@ -7,8 +7,10 @@ files:
     visible: true
     learner_created: false
   - name: test/ApplicationTests.java
+    visible: true
     learner_created: false
   - name: test/DataServer.java
+    visible: true
     learner_created: false
   - name: build.gradle
     visible: true

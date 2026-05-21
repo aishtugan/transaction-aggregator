@@ -2,6 +2,7 @@ package aggregator;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -12,11 +13,20 @@ import org.springframework.web.client.RestTemplate;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Stream;
 
 @SpringBootApplication
 @RestController
+@EnableCaching
 public class Application {
+
+    private final AccountDataClient accountDataClient;
+
+    public Application(AccountDataClient accountDataClient) {
+        this.accountDataClient = accountDataClient;
+    }
+
     public static void main(String[] args) {
         SpringApplication.run(Application.class, args);
     }
@@ -29,22 +39,6 @@ public class Application {
             String timestamp
     ) {}
 
-    private record FetchResult(
-            AccountData[] data,
-            Integer statusCode,
-            String error
-    ) {}
-
-    private FetchResult fetchAccountData(RestTemplate restTemplate, String url) {
-        try {
-            AccountData[] data = restTemplate.getForObject(url, AccountData[].class);
-            return new FetchResult(data == null ? new AccountData[0] : data, null, null);
-        } catch (HttpServerErrorException e) {
-            return new FetchResult(new AccountData[0], e.getStatusCode().value(), e.getResponseBodyAsString().isBlank()
-                                                                                    ? e.getStatusText()
-                                                                                    : e.getResponseBodyAsString());
-        }
-    }
     @GetMapping("/aggregate")
     public ResponseEntity<?> aggregate(@RequestParam String account) {
 
@@ -60,23 +54,30 @@ public class Application {
 
         for (int i = 1; i <= iterations; i++) {
 
-            FetchResult fetchResult1 = fetchAccountData(restTemplate, urlFirst + endpointName);
-            FetchResult fetchResult2 = fetchAccountData(restTemplate, urlSecond + endpointName);
+            CompletableFuture<AccountDataClient.FetchResult> future1 = CompletableFuture.supplyAsync(
+                    () -> accountDataClient.fetchAccountData(urlFirst + endpointName)
+            );
+            CompletableFuture<AccountDataClient.FetchResult> future2 = CompletableFuture.supplyAsync(
+                    () -> accountDataClient.fetchAccountData(urlSecond + endpointName)
+            );
 
-            if (fetchResult1.statusCode != null) {
-                errorResponse1 = fetchResult1.error;
-                errorCode1 = fetchResult1.statusCode;
+            AccountDataClient.FetchResult fetchResult1 = future1.join();
+            AccountDataClient.FetchResult fetchResult2 = future2.join();
+
+            if (fetchResult1.statusCode() != null) {
+                errorResponse1 = fetchResult1.error();
+                errorCode1 = fetchResult1.statusCode();
                 continue;
             }
 
-            if (fetchResult2.statusCode != null) {
-                errorResponse2 = fetchResult2.error;
-                errorCode2 = fetchResult2.statusCode;
+            if (fetchResult2.statusCode() != null) {
+                errorResponse2 = fetchResult2.error();
+                errorCode2 = fetchResult2.statusCode();
                 continue;
             }
 
-            AccountData[] accountData1 = fetchResult1.data;
-            AccountData[] accountData2 = fetchResult2.data;
+            AccountData[] accountData1 = fetchResult1.data();
+            AccountData[] accountData2 = fetchResult2.data();
 
             AccountData[] accountData = Stream.concat(
                     Arrays.stream(accountData1),
@@ -93,12 +94,5 @@ public class Application {
 
         return ResponseEntity.ok(new AccountData[0]);
 
-//        if (errorCode1 != 0) {
-//            return ResponseEntity.status(errorCode1).body(errorResponse1);
-//        } else if (errorCode2 != 0) {
-//            return ResponseEntity.status(errorCode2).body(errorResponse2);
-//        }
-//
-//        return ResponseEntity.status(503).body("Service unavailable");
     }
 }
